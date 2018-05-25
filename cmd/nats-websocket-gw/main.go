@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/gorilla/websocket"
-	"github.com/orus-io/nats-websocket-gw"
+	"github.com/scoir/nats-websocket-gw"
 )
 
 func usage() {
