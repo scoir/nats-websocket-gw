@@ -149,7 +149,7 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		doneCh <- true
 	}()
 	var buf []byte
-	if gw.settings.Trace {
+	if gw.settings.Trace || gw.settings.Prefix != ""{
 		buf = make([]byte, 1024*1024)
 	}
 	for {
