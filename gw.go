@@ -131,16 +131,22 @@ type Cmd struct {
 
 func (gw *Gateway) natsToWsWorker(ws *websocket.Conn, src CommandsReader, doneCh chan<- bool) {
 	comm := make(chan Cmd)
+	commDone := make(chan bool)
 
 	defer func() {
-		close(comm)
+		commDone <- true
 		doneCh <- true
 	}()
 
 	go func() {
 		for {
 			cmd, err := src.nextCommand()
-			comm <- Cmd {cmd: cmd, err: err}
+			select {
+			case <- commDone:
+				return
+			default:
+				comm <- Cmd {cmd: cmd, err: err}
+			}
 		}
 	}()
 
