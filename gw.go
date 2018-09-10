@@ -156,7 +156,7 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		buf = make([]byte, 1024*1024)
 	}
 	for {
-		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, src, err := ws.NextReader()
 		if err != nil {
 			fmt.Println("We gots the error from ws", err)
