@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -124,51 +125,22 @@ func (gw *Gateway) setConnectHandler(handler ConnectHandler) {
 	}
 }
 
-type Cmd struct {
-	cmd []byte
-	err error
-}
-
 func (gw *Gateway) natsToWsWorker(ws *websocket.Conn, src CommandsReader, doneCh chan<- bool) {
-	comm := make(chan Cmd)
-	commDone := make(chan bool)
-
 	defer func() {
-		commDone <- true
 		doneCh <- true
 	}()
 
-	go func() {
-		for {
-			cmd, err := src.nextCommand()
-			select {
-			case <- commDone:
-				return
-			default:
-				comm <- Cmd {cmd: cmd, err: err}
-			}
-		}
-	}()
-
-	timer := time.After(10*time.Second)
 	for {
-		select {
-		case cm := <- comm:
-			cmd := cm.cmd
-			err := cm.err
-			if err != nil {
-				gw.onError(err)
-				return
-			}
-			if gw.settings.Trace {
-				fmt.Println("[TRACE] <--", string(cmd))
-			}
-			if err := ws.WriteMessage(websocket.TextMessage, cmd); err != nil {
-				gw.onError(err)
-				return
-			}
-			timer = time.After(10*time.Second)
-		case <- timer:
+		cmd, err := src.nextCommand()
+		if err != nil {
+			gw.onError(err)
+			return
+		}
+		if gw.settings.Trace {
+			fmt.Println("[TRACE] <--", string(cmd))
+		}
+		if err := ws.WriteMessage(websocket.TextMessage, cmd); err != nil {
+			gw.onError(err)
 			return
 		}
 	}
@@ -179,12 +151,14 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		doneCh <- true
 	}()
 	var buf []byte
-	if gw.settings.Trace || gw.settings.Prefix != ""{
+	if gw.settings.Trace || gw.settings.Prefix != "" {
 		buf = make([]byte, 1024*1024)
 	}
 	for {
+		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
 		_, src, err := ws.NextReader()
 		if err != nil {
+			fmt.Println("We gots the error from ws", err)
 			gw.onError(err)
 			return
 		}
