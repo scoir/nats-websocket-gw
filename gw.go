@@ -8,7 +8,10 @@ import (
 	"net"
 	"net/http"
 
+	"time"
+
 	"github.com/gorilla/websocket"
+	"log"
 )
 
 type ErrorHandler func(error)
@@ -149,12 +152,14 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		doneCh <- true
 	}()
 	var buf []byte
-	if gw.settings.Trace || gw.settings.Prefix != ""{
+	if gw.settings.Trace || gw.settings.Prefix != "" {
 		buf = make([]byte, 1024*1024)
 	}
 	for {
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, src, err := ws.NextReader()
 		if err != nil {
+			fmt.Println("We gots the error from ws", err)
 			gw.onError(err)
 			return
 		}
@@ -195,10 +200,16 @@ func (gw *Gateway) Handler(w http.ResponseWriter, r *http.Request) {
 
 	<-doneCh
 
-	wsConn.Close()
-	natsConn.Conn.Close()
+	err = natsConn.Conn.Close()
+	if err !=  nil {
+		log.Println("unable to close nats connection", err)
+	}
+	err = wsConn.Close()
+	if err != nil {
+		log.Println("unable to close ws connection", err)
+	}
 
-	<-doneCh
+	log.Println("we are returning from ws handler.")
 }
 
 func readInfo(cmd []byte) (NatsServerInfo, error) {
