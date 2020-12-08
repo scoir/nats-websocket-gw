@@ -10,8 +10,9 @@ import (
 
 	"time"
 
-	"github.com/gorilla/websocket"
 	"log"
+
+	"github.com/gorilla/websocket"
 )
 
 type ErrorHandler func(error)
@@ -201,7 +202,7 @@ func (gw *Gateway) Handler(w http.ResponseWriter, r *http.Request) {
 	<-doneCh
 
 	err = natsConn.Conn.Close()
-	if err !=  nil {
+	if err != nil {
 		log.Println("unable to close nats connection", err)
 	}
 	err = wsConn.Close()
@@ -209,6 +210,7 @@ func (gw *Gateway) Handler(w http.ResponseWriter, r *http.Request) {
 		log.Println("unable to close ws connection", err)
 	}
 
+	<-doneCh
 	log.Println("we are returning from ws handler.")
 }
 
