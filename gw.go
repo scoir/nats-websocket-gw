@@ -5,12 +5,10 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
-
 	"time"
-
-	"log"
 
 	"github.com/gorilla/websocket"
 )
@@ -160,7 +158,6 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, src, err := ws.NextReader()
 		if err != nil {
-			fmt.Println("We gots the error from ws", err)
 			gw.onError(err)
 			return
 		}
@@ -211,7 +208,6 @@ func (gw *Gateway) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	<-doneCh
-	log.Println("we are returning from ws handler.")
 }
 
 func readInfo(cmd []byte) (NatsServerInfo, error) {
