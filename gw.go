@@ -77,27 +77,24 @@ func copyAndTrace(prefix string, dst io.Writer, src io.Reader, buf []byte) (int6
 	return int64(written), err
 }
 
-func nextMessage(prefix string, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
-	read, err := src.Read(buf)
+func nextMessage(prefix string, dst io.Writer, src io.Reader) (int64, error) {
+	// Tee out the first 4 bytes to check if it's a SUB command
+	cmdBuffer := bytes.NewBuffer(make([]byte, 0, 4))
+	cmdTeeReader := io.TeeReader(io.LimitReader(src, 4), cmdBuffer)
+	cmdLen, err := io.Copy(dst, cmdTeeReader)
 	if err != nil {
 		return 0, err
 	}
-
-	msg := buf[:read]
-	if len(buf[:read]) > 3 && bytes.Equal(buf[:read][0:3], []byte("SUB")) {
-		p := bytes.Split(buf[:read], []byte(" "))
-		ch := string(p[1])
-		cmds := [][]byte{p[0]}
-		cmds = append(cmds, []byte(fmt.Sprintf("%s%s", prefix, ch)))
-		cmds = append(cmds, p[2:]...)
-		msg = bytes.Join(cmds, []byte(" "))
+	if bytes.HasPrefix(cmdBuffer.Bytes(), []byte("SUB ")) {
+		// write in the prefix so that the websocket can't subscribe to anything but the prefix
+		_, err := dst.Write([]byte(prefix))
+		if err != nil {
+			return 0, err
+		}
 	}
-
-	written, err := dst.Write(msg)
-	if written != len(msg) {
-		return int64(written), io.ErrShortWrite
-	}
-	return int64(written), err
+	// Copy the rest of the message
+	finalLen, _ := io.Copy(dst, src)
+	return cmdLen + finalLen, err
 }
 
 func NewGateway(settings Settings) *Gateway {
@@ -151,9 +148,10 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		doneCh <- true
 	}()
 	var buf []byte
-	if gw.settings.Trace || gw.settings.Prefix != "" {
+	if gw.settings.Trace {
 		buf = make([]byte, 1024*1024)
 	}
+
 	for {
 		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, src, err := ws.NextReader()
@@ -164,7 +162,7 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		if gw.settings.Trace {
 			_, err = copyAndTrace("-->", nats, src, buf)
 		} else if gw.settings.Prefix != "" {
-			_, err = nextMessage(gw.settings.Prefix, nats, src, buf)
+			_, err = nextMessage(gw.settings.Prefix, nats, src)
 		} else {
 			_, err = io.Copy(nats, src)
 		}
