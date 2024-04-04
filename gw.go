@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/scoir/nats-websocket-gw/internal/buffer"
 )
 
 type ErrorHandler func(error)
@@ -75,26 +77,6 @@ func copyAndTrace(prefix string, dst io.Writer, src io.Reader, buf []byte) (int6
 		return int64(written), io.ErrShortWrite
 	}
 	return int64(written), err
-}
-
-func nextMessage(prefix string, dst io.Writer, src io.Reader) (int64, error) {
-	// Tee out the first 4 bytes to check if it's a SUB command
-	cmdBuffer := bytes.NewBuffer(make([]byte, 0, 4))
-	cmdTeeReader := io.TeeReader(io.LimitReader(src, 4), cmdBuffer)
-	cmdLen, err := io.Copy(dst, cmdTeeReader)
-	if err != nil {
-		return 0, err
-	}
-	if bytes.HasPrefix(cmdBuffer.Bytes(), []byte("SUB ")) {
-		// write in the prefix so that the websocket can't subscribe to anything but the prefix
-		_, err := dst.Write([]byte(prefix))
-		if err != nil {
-			return 0, err
-		}
-	}
-	// Copy the rest of the message
-	finalLen, _ := io.Copy(dst, src)
-	return cmdLen + finalLen, err
 }
 
 func NewGateway(settings Settings) *Gateway {
@@ -162,7 +144,7 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 		if gw.settings.Trace {
 			_, err = copyAndTrace("-->", nats, src, buf)
 		} else if gw.settings.Prefix != "" {
-			_, err = nextMessage(gw.settings.Prefix, nats, src)
+			_, err = buffer.CopyCommandWithPrefix(gw.settings.Prefix, nats, src)
 		} else {
 			_, err = io.Copy(nats, src)
 		}
