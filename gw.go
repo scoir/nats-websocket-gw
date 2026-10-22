@@ -1,18 +1,15 @@
 package gw
 
 import (
+	"bufio"
 	"bytes"
-	"crypto/tls"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
-
-	"github.com/scoir/nats-websocket-gw/internal/buffer"
 )
 
 type ErrorHandler func(error)
@@ -21,14 +18,12 @@ type ConnectHandler func(*NatsConn, *websocket.Conn) error
 type NatsServerInfo string
 
 type Settings struct {
-	NatsAddr       string
-	EnableTls      bool
-	TlsConfig      *tls.Config
-	ConnectHandler ConnectHandler
-	ErrorHandler   ErrorHandler
-	WSUpgrader     *websocket.Upgrader
-	Prefix         string
-	Trace          bool
+	NatsAddr         string
+	ConnectHandler   ConnectHandler
+	ErrorHandler     ErrorHandler
+	WSUpgrader       *websocket.Upgrader
+	Prefix           string
+	IsAllowedCommand func(cmd string) bool
 }
 
 type Gateway struct {
@@ -53,9 +48,6 @@ func (gw *Gateway) defaultConnectHandler(natsConn *NatsConn, wsConn *websocket.C
 	// after having forwarded the 'INFO' command
 	infoCmd := append([]byte("INFO "), []byte(natsConn.ServerInfo)...)
 	infoCmd = append(infoCmd, byte('\r'), byte('\n'))
-	if gw.settings.Trace {
-		fmt.Println("[TRACE] <--", string(infoCmd))
-	}
 	if err := wsConn.WriteMessage(websocket.TextMessage, infoCmd); err != nil {
 		return err
 	}
@@ -64,19 +56,6 @@ func (gw *Gateway) defaultConnectHandler(natsConn *NatsConn, wsConn *websocket.C
 
 func defaultErrorHandler(err error) {
 	fmt.Println("[ERROR]", err)
-}
-
-func copyAndTrace(prefix string, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
-	read, err := src.Read(buf)
-	if err != nil {
-		return 0, err
-	}
-	fmt.Println("[TRACE]", prefix, string(buf[:read]))
-	written, err := dst.Write(buf[:read])
-	if written != read {
-		return int64(written), io.ErrShortWrite
-	}
-	return int64(written), err
 }
 
 func NewGateway(settings Settings) *Gateway {
@@ -115,9 +94,6 @@ func (gw *Gateway) natsToWsWorker(ws *websocket.Conn, src CommandsReader, doneCh
 			gw.onError(err)
 			return
 		}
-		if gw.settings.Trace {
-			fmt.Println("[TRACE] <--", string(cmd))
-		}
 		if err := ws.WriteMessage(websocket.TextMessage, cmd); err != nil {
 			gw.onError(err)
 			return
@@ -129,10 +105,8 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 	defer func() {
 		doneCh <- true
 	}()
-	var buf []byte
-	if gw.settings.Trace {
-		buf = make([]byte, 1024*1024)
-	}
+	br := bufio.NewReaderSize(nil, maxControlLine)
+	out := bufio.NewWriter(nats)
 
 	for {
 		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -141,12 +115,8 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 			gw.onError(err)
 			return
 		}
-		if gw.settings.Trace {
-			_, err = copyAndTrace("-->", nats, src, buf)
-		} else if gw.settings.Prefix != "" {
-			_, err = buffer.CopyCommandWithPrefix(gw.settings.Prefix, nats, src)
-		} else {
-			_, err = io.Copy(nats, src)
+		if err = gw.forwardClientCommands(out, br, src); err == nil {
+			err = out.Flush()
 		}
 		if err != nil {
 			gw.onError(err)
@@ -219,21 +189,6 @@ func (gw *Gateway) initNatsConnectionForWSConn(wsConn *websocket.Conn) (*NatsCon
 	}
 
 	natsConn.ServerInfo = info
-
-	// optionnaly initialize the TLS layer
-	// TODO check if the server requires TLS, which overrides the 'enableTls' setting
-	if gw.settings.EnableTls {
-		tlsConfig := gw.settings.TlsConfig
-		if tlsConfig == nil {
-			tlsConfig = &tls.Config{
-				InsecureSkipVerify: true,
-			}
-		}
-		tlsConn := tls.Client(conn, tlsConfig)
-		tlsConn.Handshake()
-		natsConn.Conn = tlsConn
-		natsConn.CmdReader = NewCommandsReader(tlsConn)
-	}
 
 	if err := gw.handleConnect(&natsConn, wsConn); err != nil {
 		return nil, err

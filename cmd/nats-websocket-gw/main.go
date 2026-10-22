@@ -6,11 +6,12 @@ import (
 	"os"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/scoir/nats-websocket-gw"
 )
 
 func usage() {
-	fmt.Printf(`Usage: %s [ --help ] [ --no-origin-check ] [ --trace ]
+	fmt.Printf(`Usage: %s [ --help ] [ --no-origin-check ]
 `, os.Args[0])
 }
 
@@ -30,8 +31,6 @@ func main() {
 				WriteBufferSize: 1024,
 				CheckOrigin:     func(r *http.Request) bool { return true },
 			}
-		case "--trace":
-			settings.Trace = true
 		default:
 			fmt.Printf("Invalid args: %s\n\n", arg)
 			usage()
