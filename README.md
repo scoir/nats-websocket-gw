@@ -53,10 +53,20 @@ func main() {
 - `Settings.IsAllowedCommand` is called with the uppercased verb (`PUB`, `SUB`,
   ...) of every command a client sends. If it returns false the connection is
   closed. When nil, all commands are allowed.
+- `Settings.IsAllowedPublish` is called with the subject of every `PUB` a client
+  sends. If it returns false the connection is closed. When nil, all subjects
+  are allowed.
+- When `Settings.Prefix` is set, a `PUB` reply-to must start with it, since the
+  client can only receive on prefixed subjects. Otherwise the connection is
+  closed.
 
 Client messages are parsed command by command, so a websocket message may hold
 several commands, but a `PUB` and its payload must be in the same message.
 `HPUB` is not supported and closes the connection.
+
+When a connection is closed because of what the client sent, the error passed
+to `Settings.ErrorHandler` wraps `gw.ErrInvalidCommand`, so rejections can be
+told apart from connection failures with `errors.Is`.
 
 ## How does it differ from other nats-websocket servers ?
 

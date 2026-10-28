@@ -24,6 +24,7 @@ type Settings struct {
 	WSUpgrader       *websocket.Upgrader
 	Prefix           string
 	IsAllowedCommand func(cmd string) bool
+	IsAllowedPublish func(subject string) bool
 }
 
 type Gateway struct {
