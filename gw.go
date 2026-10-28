@@ -1,6 +1,7 @@
 package gw
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"fmt"
@@ -19,6 +20,9 @@ type ErrorHandler func(error)
 type ConnectHandler func(*NatsConn, *websocket.Conn) error
 
 type NatsServerInfo string
+
+// maxControlLine is the NATS server's default max_control_line
+const maxControlLine = 4096
 
 type Settings struct {
 	NatsAddr       string
@@ -64,19 +68,6 @@ func (gw *Gateway) defaultConnectHandler(natsConn *NatsConn, wsConn *websocket.C
 
 func defaultErrorHandler(err error) {
 	fmt.Println("[ERROR]", err)
-}
-
-func copyAndTrace(prefix string, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
-	read, err := src.Read(buf)
-	if err != nil {
-		return 0, err
-	}
-	fmt.Println("[TRACE]", prefix, string(buf[:read]))
-	written, err := dst.Write(buf[:read])
-	if written != read {
-		return int64(written), io.ErrShortWrite
-	}
-	return int64(written), err
 }
 
 func NewGateway(settings Settings) *Gateway {
@@ -129,10 +120,9 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 	defer func() {
 		doneCh <- true
 	}()
-	var buf []byte
-	if gw.settings.Trace {
-		buf = make([]byte, 1024*1024)
-	}
+	br := bufio.NewReaderSize(nil, maxControlLine)
+	out := bufio.NewWriter(nats)
+	var trace bytes.Buffer
 
 	for {
 		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -141,12 +131,23 @@ func (gw *Gateway) wsToNatsWorker(nats net.Conn, ws *websocket.Conn, doneCh chan
 			gw.onError(err)
 			return
 		}
+		var dst io.Writer = out
 		if gw.settings.Trace {
-			_, err = copyAndTrace("-->", nats, src, buf)
-		} else if gw.settings.Prefix != "" {
-			_, err = buffer.CopyCommandWithPrefix(gw.settings.Prefix, nats, src)
+			trace.Reset()
+			dst = io.MultiWriter(out, &trace)
+		}
+		if gw.settings.Prefix != "" {
+			br.Reset(src)
+			err = buffer.CopyCommandsWithPrefix(gw.settings.Prefix, dst, br)
 		} else {
-			_, err = io.Copy(nats, src)
+			_, err = io.Copy(dst, src)
+		}
+		if err == nil {
+			// nothing reaches NATS until the whole frame has been checked
+			err = out.Flush()
+		}
+		if gw.settings.Trace {
+			fmt.Println("[TRACE] -->", trace.String())
 		}
 		if err != nil {
 			gw.onError(err)
