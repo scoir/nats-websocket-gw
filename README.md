@@ -64,6 +64,10 @@ Client messages are parsed command by command, so a websocket message may hold
 several commands, but a `PUB` and its payload must be in the same message.
 `HPUB` is not supported and closes the connection.
 
+When a connection is closed because of what the client sent, the error passed
+to `Settings.ErrorHandler` wraps `gw.ErrInvalidCommand`, so rejections can be
+told apart from connection failures with `errors.Is`.
+
 ## How does it differ from other nats-websocket servers ?
 
 - [Rest to NATS Proxy](https://github.com/sohlich/nats-proxy) provides a websocket

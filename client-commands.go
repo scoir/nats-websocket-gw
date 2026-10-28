@@ -14,6 +14,14 @@ import (
 // maxControlLine matches the default max_control_line of the NATS server.
 const maxControlLine = 4096
 
+// ErrInvalidCommand is wrapped by the errors passed to the ErrorHandler when a
+// connection is closed because the client sent a command that isn't allowed or
+// can't be parsed, as opposed to the connection failing. Check for it with
+// errors.Is.
+var ErrInvalidCommand = errors.New("invalid command")
+
+var crlf = []byte("\r\n")
+
 // forwardClientCommands parses the NATS client protocol commands in a single
 // websocket frame (src), checks each one against Settings.IsAllowedCommand and
 // forwards it to dst, applying Settings.Prefix to SUBs. br is reused between
@@ -30,7 +38,10 @@ func (gw *Gateway) forwardClientCommands(dst io.Writer, br *bufio.Reader, src io
 			return nil
 		}
 		if err == io.EOF {
-			return errors.New("unterminated command")
+			return fmt.Errorf("%w: unterminated command", ErrInvalidCommand)
+		}
+		if err == bufio.ErrBufferFull {
+			return fmt.Errorf("%w: command longer than %d bytes", ErrInvalidCommand, br.Size())
 		}
 		if err != nil {
 			return err
@@ -38,11 +49,11 @@ func (gw *Gateway) forwardClientCommands(dst io.Writer, br *bufio.Reader, src io
 
 		args := splitArgs(line)
 		if len(args) == 0 {
-			return errors.New("empty command")
+			return fmt.Errorf("%w: empty command", ErrInvalidCommand)
 		}
 		verb := string(bytes.ToUpper(args[0]))
 		if gw.settings.IsAllowedCommand != nil && !gw.settings.IsAllowedCommand(verb) {
-			return fmt.Errorf("command not allowed: %q", verb)
+			return fmt.Errorf("%w: command not allowed: %q", ErrInvalidCommand, verb)
 		}
 
 		payloadLen, err := payloadLength(verb, args)
@@ -62,13 +73,20 @@ func (gw *Gateway) forwardClientCommands(dst io.Writer, br *bufio.Reader, src io
 		if payloadLen < 0 {
 			continue
 		}
-		// the payload is followed by a trailing \r\n
-		n, err := io.Copy(dst, io.LimitReader(br, payloadLen+2))
+		n, err := io.Copy(dst, io.LimitReader(br, payloadLen))
 		if err != nil {
 			return err
 		}
-		if n != payloadLen+2 {
-			return fmt.Errorf("%s payload cut short: got %d of %d bytes", verb, n, payloadLen+2)
+		if n != payloadLen {
+			return fmt.Errorf("%w: %s payload cut short: got %d of %d bytes", ErrInvalidCommand, verb, n, payloadLen)
+		}
+		// the payload must be followed by a trailing \r\n
+		if end, err := br.Peek(len(crlf)); err != nil || !bytes.Equal(end, crlf) {
+			return fmt.Errorf("%w: %s payload is not followed by CRLF", ErrInvalidCommand, verb)
+		}
+		br.Discard(len(crlf))
+		if _, err = dst.Write(crlf); err != nil {
+			return err
 		}
 	}
 }
@@ -80,10 +98,10 @@ func (gw *Gateway) forwardClientCommands(dst io.Writer, br *bufio.Reader, src io
 func (gw *Gateway) checkPublish(args [][]byte) error {
 	subject := string(args[1])
 	if gw.settings.IsAllowedPublish != nil && !gw.settings.IsAllowedPublish(subject) {
-		return fmt.Errorf("publish not allowed: %q", subject)
+		return fmt.Errorf("%w: publish not allowed: %q", ErrInvalidCommand, subject)
 	}
 	if len(args) == 4 && gw.settings.Prefix != "" && !bytes.HasPrefix(args[2], []byte(gw.settings.Prefix)) {
-		return fmt.Errorf("reply-to not allowed: %q", args[2])
+		return fmt.Errorf("%w: reply-to not allowed: %q", ErrInvalidCommand, args[2])
 	}
 	return nil
 }
@@ -101,14 +119,14 @@ func splitArgs(line []byte) [][]byte {
 func payloadLength(verb string, args [][]byte) (int64, error) {
 	switch verb {
 	case "HPUB":
-		return 0, errors.New("HPUB is not supported")
+		return 0, fmt.Errorf("%w: HPUB is not supported", ErrInvalidCommand)
 	case "PUB": // PUB <subject> [reply-to] <#bytes>
 		if len(args) < 3 || len(args) > 4 {
-			return 0, errors.New("invalid PUB: wrong number of arguments")
+			return 0, fmt.Errorf("%w: invalid PUB: wrong number of arguments", ErrInvalidCommand)
 		}
 		size, err := strconv.ParseUint(string(args[len(args)-1]), 10, 31)
 		if err != nil {
-			return 0, fmt.Errorf("invalid PUB payload size: %w", err)
+			return 0, fmt.Errorf("%w: invalid PUB payload size: %v", ErrInvalidCommand, err)
 		}
 		return int64(size), nil
 	}

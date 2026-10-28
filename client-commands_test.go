@@ -3,6 +3,7 @@ package gw
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -85,6 +86,9 @@ func TestForwardClientCommands(t *testing.T) {
 		{name: "unterminated", input: "PING", wantErr: "unterminated command"},
 		{name: "bad size", input: "PUB foo -1\r\n", wantErr: "invalid PUB payload size"},
 		{name: "missing size", input: "PUB foo\r\n", wantErr: "wrong number of arguments"},
+		{name: "payload without CRLF", input: "PUB foo 2\r\nhi", expected: "PUB foo 2\r\nhi", wantErr: "payload is not followed by CRLF"},
+		{name: "payload longer than its size", input: "PUB foo 2\r\nhiSUB > 1\r\n", expected: "PUB foo 2\r\nhi", wantErr: "payload is not followed by CRLF"},
+		{name: "control line longer than max_control_line", input: "SUB " + strings.Repeat("a", maxControlLine) + " 1\r\n", wantErr: "command longer than"},
 		{name: "truncated payload", input: "PUB foo 10\r\nhi\r\n", expected: "PUB foo 10\r\nhi\r\n", wantErr: "payload cut short"},
 	}
 
@@ -96,6 +100,9 @@ func TestForwardClientCommands(t *testing.T) {
 			}
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+			if tc.wantErr != "" && !errors.Is(err, ErrInvalidCommand) {
+				t.Fatalf("expected ErrInvalidCommand, got %v", err)
 			}
 			if out != tc.expected {
 				t.Fatalf("expected %q, got %q", tc.expected, out)
