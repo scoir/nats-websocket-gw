@@ -49,6 +49,11 @@ func (gw *Gateway) forwardClientCommands(dst io.Writer, br *bufio.Reader, src io
 		if err != nil {
 			return err
 		}
+		if verb == "PUB" {
+			if err = gw.checkPublish(args); err != nil {
+				return err
+			}
+		}
 
 		if err = buffer.WriteCommandWithPrefix(gw.settings.Prefix, dst, line); err != nil {
 			return err
@@ -66,6 +71,21 @@ func (gw *Gateway) forwardClientCommands(dst io.Writer, br *bufio.Reader, src io
 			return fmt.Errorf("%s payload cut short: got %d of %d bytes", verb, n, payloadLen+2)
 		}
 	}
+}
+
+// checkPublish checks a PUB's subject against Settings.IsAllowedPublish. Its
+// reply-to, if any, must be inside Settings.Prefix: the client only receives on
+// prefixed subjects, so any other reply-to would only point replies at
+// somebody else.
+func (gw *Gateway) checkPublish(args [][]byte) error {
+	subject := string(args[1])
+	if gw.settings.IsAllowedPublish != nil && !gw.settings.IsAllowedPublish(subject) {
+		return fmt.Errorf("publish not allowed: %q", subject)
+	}
+	if len(args) == 4 && gw.settings.Prefix != "" && !bytes.HasPrefix(args[2], []byte(gw.settings.Prefix)) {
+		return fmt.Errorf("reply-to not allowed: %q", args[2])
+	}
+	return nil
 }
 
 // splitArgs splits a control line on the same delimiters as the NATS server.
