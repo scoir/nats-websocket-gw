@@ -6,7 +6,6 @@ A websocket gateway for NATS, usable as a backend for
 
 Features:
 
-- TLS support
 - Each NATS command is sent as a separate websocket message
 - Provides a hook to change the CONNECT phase, allowing the http server to
   handle the connection itself (for example based on a cookie of the http request)
@@ -47,6 +46,28 @@ func main() {
 }
 ```
 
+## Restricting clients
+
+- `Settings.Prefix` is prepended to the subject of every `SUB` a client sends.
+  `PUB` subjects are not prefixed.
+- `Settings.IsAllowedCommand` is called with the uppercased verb (`PUB`, `SUB`,
+  ...) of every command a client sends. If it returns false the connection is
+  closed. When nil, all commands are allowed.
+- `Settings.IsAllowedPublish` is called with the subject of every `PUB` a client
+  sends. If it returns false the connection is closed. When nil, all subjects
+  are allowed.
+- When `Settings.Prefix` is set, a `PUB` reply-to must start with it, since the
+  client can only receive on prefixed subjects. Otherwise the connection is
+  closed.
+
+Client messages are parsed command by command, so a websocket message may hold
+several commands, but a `PUB` and its payload must be in the same message.
+`HPUB` is not supported and closes the connection.
+
+When a connection is closed because of what the client sent, the error passed
+to `Settings.ErrorHandler` wraps `gw.ErrInvalidCommand`, so rejections can be
+told apart from connection failures with `errors.Is`.
+
 ## How does it differ from other nats-websocket servers ?
 
 - [Rest to NATS Proxy](https://github.com/sohlich/nats-proxy) provides a websocket
@@ -56,8 +77,5 @@ func main() {
 
 - [ws-tcp-relay](https://github.com/isobit/ws-tcp-relay), which the proposed
   backend for [websocket-nats](https://github.com/isobit/websocket-nats) is a generic
-  ws-tcp gateway. As such, it:
-  - does not allow for TLS connections to NATS because the TLS negociation
-    cannot be done immediately (the NATS protocol has a clear text 'INFO' exchange
-    before TLS handshake)
-  - send websocket messages that may contain several NATS commands.
+  ws-tcp gateway. As such, it sends websocket messages that may contain several
+  NATS commands.

@@ -5,23 +5,38 @@ import (
 	"io"
 )
 
-func CopyCommandWithPrefix(prefix string, dst io.Writer, src io.Reader) (int64, error) {
-	// Tee out the first 4 bytes to check if it's a SUB command
-	cmdBuffer := bytes.NewBuffer(make([]byte, 0, 4))
-	cmdTeeReader := io.TeeReader(io.LimitReader(src, 4), cmdBuffer)
-	cmdLen, err := io.Copy(dst, cmdTeeReader)
-	if err != nil {
-		return 0, err
+// WriteCommandWithPrefix writes a single NATS control line to dst. If the line
+// is a SUB, prefix is inserted at the start of the subject so that the
+// websocket can't subscribe to anything but the prefix. Like the NATS server,
+// it treats the verb case-insensitively and accepts spaces or tabs between
+// the verb and the subject.
+func WriteCommandWithPrefix(prefix string, dst io.Writer, line []byte) error {
+	verbStart := skipDelimiters(line, 0)
+	verbEnd := verbStart
+	for verbEnd < len(line) && !isDelimiter(line[verbEnd]) {
+		verbEnd++
 	}
-	prefixLen := 0
-	if bytes.HasPrefix(cmdBuffer.Bytes(), []byte("SUB ")) {
-		// write in the prefix so that the websocket can't subscribe to anything but the prefix
-		prefixLen, err = dst.Write([]byte(prefix))
-		if err != nil {
-			return 0, err
+	subject := skipDelimiters(line, verbEnd)
+
+	if !bytes.EqualFold(line[verbStart:verbEnd], []byte("SUB")) || subject == len(line) {
+		_, err := dst.Write(line)
+		return err
+	}
+	for _, part := range [][]byte{line[:subject], []byte(prefix), line[subject:]} {
+		if _, err := dst.Write(part); err != nil {
+			return err
 		}
 	}
-	// Copy the rest of the message
-	finalLen, _ := io.Copy(dst, src)
-	return cmdLen + int64(prefixLen) + finalLen, err
+	return nil
+}
+
+func skipDelimiters(line []byte, i int) int {
+	for i < len(line) && isDelimiter(line[i]) {
+		i++
+	}
+	return i
+}
+
+func isDelimiter(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
 }
