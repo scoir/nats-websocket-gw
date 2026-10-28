@@ -24,6 +24,11 @@ type NatsServerInfo string
 // maxControlLine is the NATS server's default max_control_line
 const maxControlLine = 4096
 
+// ErrInvalidCommand is wrapped by the errors passed to the ErrorHandler when a
+// connection is closed because the client sent a command that isn't allowed or
+// can't be parsed. Check for it with errors.Is.
+var ErrInvalidCommand = buffer.ErrInvalidCommand
+
 type Settings struct {
 	NatsAddr       string
 	EnableTls      bool

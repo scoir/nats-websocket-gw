@@ -3,6 +3,7 @@ package buffer_test
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -78,8 +79,9 @@ func TestWebsocketPrefixingRejects(t *testing.T) {
 			r := bufio.NewReaderSize(strings.NewReader(tc.input), 4096)
 			w := bytes.NewBuffer(nil)
 
-			if err := buffer.CopyCommandsWithPrefix("prefixed.", w, r); err == nil {
-				t.Fatalf("expected an error, wrote %q", w.String())
+			err := buffer.CopyCommandsWithPrefix("prefixed.", w, r)
+			if !errors.Is(err, buffer.ErrInvalidCommand) {
+				t.Fatalf("expected ErrInvalidCommand, got %v", err)
 			}
 		})
 	}

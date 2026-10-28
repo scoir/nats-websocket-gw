@@ -11,6 +11,10 @@ import (
 
 var crlf = []byte("\r\n")
 
+// ErrInvalidCommand is wrapped by every error caused by what the client sent,
+// as opposed to the connection failing.
+var ErrInvalidCommand = errors.New("invalid command")
+
 // CopyCommandsWithPrefix copies the NATS client commands in src to dst, writing
 // prefix in front of every subject a SUB or PUB names so that the websocket
 // can't subscribe or publish to anything outside the prefix.
@@ -25,7 +29,10 @@ func CopyCommandsWithPrefix(prefix string, dst io.Writer, src *bufio.Reader) err
 			return nil
 		}
 		if err == io.EOF {
-			return errors.New("unterminated command")
+			return fmt.Errorf("%w: unterminated command", ErrInvalidCommand)
+		}
+		if err == bufio.ErrBufferFull {
+			return fmt.Errorf("%w: command longer than %d bytes", ErrInvalidCommand, src.Size())
 		}
 		if err != nil {
 			return fmt.Errorf("reading command: %w", err)
@@ -33,7 +40,7 @@ func CopyCommandsWithPrefix(prefix string, dst io.Writer, src *bufio.Reader) err
 
 		args := bytes.FieldsFunc(line, isDelimiter)
 		if len(args) == 0 {
-			return errors.New("empty command")
+			return fmt.Errorf("%w: empty command", ErrInvalidCommand)
 		}
 		switch verb := string(bytes.ToUpper(args[0])); verb {
 		case "CONNECT", "PING", "PONG", "UNSUB":
@@ -44,7 +51,7 @@ func CopyCommandsWithPrefix(prefix string, dst io.Writer, src *bufio.Reader) err
 			err = writePub(prefix, dst, src, args)
 		default:
 			// this includes HPUB, whose payload we don't parse
-			return fmt.Errorf("command not allowed: %q", verb)
+			return fmt.Errorf("%w: %q is not allowed", ErrInvalidCommand, verb)
 		}
 		if err != nil {
 			return err
@@ -55,7 +62,7 @@ func CopyCommandsWithPrefix(prefix string, dst io.Writer, src *bufio.Reader) err
 // writeSub writes SUB <subject> [queue group] <sid>
 func writeSub(prefix string, dst io.Writer, args [][]byte) error {
 	if len(args) != 3 && len(args) != 4 {
-		return errors.New("invalid SUB: wrong number of arguments")
+		return fmt.Errorf("%w: SUB has the wrong number of arguments", ErrInvalidCommand)
 	}
 	args[1] = withPrefix(prefix, args[1])
 	return writeLine(dst, args)
@@ -65,11 +72,11 @@ func writeSub(prefix string, dst io.Writer, args [][]byte) error {
 // The reply-to is prefixed too, so replies can't be sent outside the prefix.
 func writePub(prefix string, dst io.Writer, src *bufio.Reader, args [][]byte) error {
 	if len(args) != 3 && len(args) != 4 {
-		return errors.New("invalid PUB: wrong number of arguments")
+		return fmt.Errorf("%w: PUB has the wrong number of arguments", ErrInvalidCommand)
 	}
 	size, err := strconv.ParseUint(string(args[len(args)-1]), 10, 31)
 	if err != nil {
-		return fmt.Errorf("invalid PUB payload size: %w", err)
+		return fmt.Errorf("%w: PUB payload size: %v", ErrInvalidCommand, err)
 	}
 	for i := 1; i < len(args)-1; i++ {
 		args[i] = withPrefix(prefix, args[i])
@@ -78,12 +85,14 @@ func writePub(prefix string, dst io.Writer, src *bufio.Reader, args [][]byte) er
 		return err
 	}
 
-	if _, err = io.CopyN(dst, src, int64(size)); err != nil {
+	if _, err = io.CopyN(dst, src, int64(size)); err == io.EOF {
+		return fmt.Errorf("%w: PUB payload is shorter than its size", ErrInvalidCommand)
+	} else if err != nil {
 		return fmt.Errorf("reading PUB payload: %w", err)
 	}
 	end, err := src.Peek(len(crlf))
 	if err != nil || !bytes.Equal(end, crlf) {
-		return errors.New("PUB payload is not followed by CRLF")
+		return fmt.Errorf("%w: PUB payload is not followed by CRLF", ErrInvalidCommand)
 	}
 	if _, err = src.Discard(len(crlf)); err != nil {
 		return err
